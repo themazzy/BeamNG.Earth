@@ -273,6 +273,21 @@ def hk_tags(key):
     return (("hk1",) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
 
 
+def cz_tags(key):
+    """("cz1",) when map cell key's ("z/x/y" or (z, x, y)) road plans and facts are made with Czechia's measured bridge
+    decks (czlidar.py: this source and the lidar on, its box meeting the country's), else (). In their cache keys: the
+    plans and level ranges made there before (inferred) are not these, nor a baked pack's (made without them)."""
+    try:
+        z, x, y = (int(v) for v in (str(key).split("/") if isinstance(key, str) else key[:3]))
+    except (TypeError, ValueError):
+        return ()
+    if not (ON and LIDAR_ON and czlidar.ON):
+        return ()
+    lon0, lat0, lon1, lat1 = mapcells.CellKey(z, x, y).bounds()
+    b = czlidar.BOUNDS
+    return ("cz1",) if lat0 <= b[2] and b[0] <= lat1 and lon0 <= b[3] and b[1] <= lon1 else ()
+
+
 def hk_cell(key):
     """Are map cell key's road plans made with Hong Kong's measured heights or terrain (hk_tags)? They are then kept on
     this computer only: the HK government's terms allow redistribution, but with an indemnity and terms that may change

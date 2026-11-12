@@ -65,6 +65,19 @@ class GridTest(unittest.TestCase):
         self.assertIn("lidar", roadz.sources_at(*PRAGUE, lidar=True))
         self.assertNotIn("lidar", roadz.sources_at(*PRAGUE, lidar=False))
 
+    def test_cache_tags(self):
+        """Plans and facts made in Czechia with the measured decks are not the ones made there before."""
+        key = roadz.mapcells.cell_of(*PRAGUE)
+        self.assertEqual(roadz.cz_tags(key), ("cz1",))
+        self.assertEqual(roadz.cz_tags(str(key)), ("cz1",))
+        self.assertEqual(roadz.cz_tags(roadz.mapcells.cell_of(48.85, 2.35)), (), "Paris")
+        old = czlidar.ON
+        try:
+            czlidar.ON = False
+            self.assertEqual(roadz.cz_tags(key), ())
+        finally:
+            czlidar.ON = old
+
 
 class DecodeTest(unittest.TestCase):
     def test_heights_and_nodata(self):

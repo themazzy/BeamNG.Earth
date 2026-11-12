@@ -545,8 +545,10 @@ def _facts_key(feats, kind, extra):
     import revisit
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
-    # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
-    return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
+    # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions;
+    # a Czech cell's made with its measured decks' elevated stretches: roadz.cz_tags)
+    import roadz
+    return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra, *roadz.cz_tags(cid[0]))
 
 
 def _facts_load(feats, kind, extra):
@@ -578,6 +580,9 @@ def _facts_baked(feats, kind, extra):
     import revisit
     cid = feats.__dict__.get("_bnge_cell")
     if cid is None or revisit.CACHE_DIR is None:
+        return None
+    import roadz
+    if roadz.cz_tags(cid[0]):               # (packs are made without Czechia's measured decks)
         return None
     import bakepack
     try:
