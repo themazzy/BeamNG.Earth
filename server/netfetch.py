@@ -389,6 +389,11 @@ POLICIES["data.geopf.fr#ign_wfs"] = replace(POLICIES["data.geopf.fr"], rate=25.0
                                             daily_budget=100000)
 POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=_IGN_RATE, burst=2.0 * _IGN_RATE,
                                     max_conc=max(12, int(_IGN_RATE / 2)), daily_budget=100000)
+# Czechia's lidar surface and terrain (czlidar.py, roadz's bridge decks there): one 256 px exportImage per ~390 m
+# tile and product along a map cell's bridges, kept on disk; its own lane (the orthophoto tiles share the host)
+POLICIES["ags.cuzk.gov.cz#roadz"] = HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000, daily_hard=40000,
+                                               allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True,
+                                               timeout=30.0, max_attempts=3, base_delay=2.0, optional=True)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case

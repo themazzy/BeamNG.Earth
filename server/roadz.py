@@ -54,6 +54,7 @@ from collections import OrderedDict
 import numpy as np
 
 import fast
+import czlidar
 import hkdtm
 import hklidar
 import mapcells
@@ -103,6 +104,11 @@ MASK_M = 8.0                # m, the cells of the boxes' mask the points are kep
 DATUM_MIN_PTS = 50
 DATUM_MAX_MAD_M = 2.0       # the dataset's ground off ours by more than this (spread): not used there
 CLIP_PAD_M = 60.0           # m past a cell's box its bridges are measured (the next cell measures on)
+# Czechia (czlidar.py): a deck whose middle (CZ_END_M in from its ends) stands within CZ_NEW_DECK_M of CUZK's terrain
+# at CZ_NEW_DECK_SHARE of its stations is not in the 2009-2013 surface (built since): the inference keeps it
+CZ_END_M = 10.0
+CZ_NEW_DECK_M = 1.0
+CZ_NEW_DECK_SHARE = 0.8
 
 # NVDB flags few bridges on its road links (medium "L"; most bridges are objects of their own, type 60), but its links'
 # heights are the road's own, on a deck too: a map bridge may take any link of it that is not in a tunnel (the
@@ -251,8 +257,8 @@ def sources_at(lat, lon, lidar=None):
         out.append("nvdb")
     if HK_ON and _in(HK_BOUNDS, lat, lon):
         out.append("hk")
-    if lidar and any(_in(b, lat, lon) for b in US_BOUNDS):
-        out.append("lidar")
+    if lidar and (any(_in(b, lat, lon) for b in US_BOUNDS) or czlidar.inside(lat, lon)):
+        out.append("lidar")         # (in Czechia: CUZK's surface model, czlidar.py)
     return out
 
 
@@ -639,6 +645,7 @@ class RoadZ:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
+        self.cz = czlidar.at(cache_dir, fetcher)         # (Czechia's surface and terrain tiles: _cz_from)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self._raw = OrderedDict()           # (dataset, node) -> its .laz bytes (_node_bytes; RAW_NODES_MB kept)
         self._raw_bytes = 0
@@ -970,6 +977,8 @@ class RoadZ:
             first = parts[0][0] if parts else cands[0][1]
             mid = first[len(first) // 2]
             names = lidar_datasets(float(mid[1]), float(mid[0]))
+        if not names and czlidar.inside(lat_c, lon_c):
+            names = [czlidar.DATASET]
         if not names:
             return Lines.build([], corrected=True)
         frame = geodesy.EnuFrame(lat_c, lon_c)
@@ -1118,6 +1127,8 @@ class RoadZ:
             got = Lines.build([], corrected=True)
             got.gaps = []
             return got
+        if name == czlidar.DATASET:
+            return self._cz_from(key, frame, parts, local, nb, fids)
         ept = self._ept_of(name)
         boxes = self._boxes(frame, parts[:nb], local[:nb])
         b0 = boxes[len(boxes) // 2]            # (at a bridge: the cell's centre may lie outside the dataset)
@@ -1178,6 +1189,77 @@ class RoadZ:
         got = Lines.build(rows, corrected=True)
         got.gaps = gaps
         return got
+
+    def _cz_from(self, key, frame, parts, local, nb, fids):
+        """_lidar_from for Czechia (czlidar.py): the surface model's pixels along the parts as the points (class 1), the
+        terrain model's under them for the datum; a deck standing under CZ_NEW_DECK_M over the terrain along its middle
+        is refused (the surface was flown 2009-2013: a bridge built since reads as the ground under it). None without
+        a usable surface there (outside the country: the inference)."""
+        boxes = self._boxes(frame, parts, local)
+        sx, sy, sz = self.cz.points("dmp1g", boxes)
+        if len(sz) < DATUM_MIN_PTS:
+            return None
+        # the datum: the terrain under the same boxes against our DEM (Bpv; our DEM's may differ by a few decimetres)
+        gx, gy, gz = self.cz.points("dmr5g", boxes)
+        if len(gz) > 4000:
+            sel = np.arange(0, len(gz), int(math.ceil(len(gz) / 4000)))
+            gx, gy, gz = gx[sel], gy[sel], gz[sel]
+        gla, glo = merc_ll(gx, gy)
+        fit = datum_fit(gz, self._dem_raw(gla, glo)) if len(gz) else None
+        if fit is None or fit[0] != 1.0:
+            log.debug("roadz cz %s: no datum fit (%d terrain points)", key, len(gz))
+            return None
+        off = fit[1]
+        la, lo = merc_ll(sx, sy)
+        e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
+        pts = np.ascontiguousarray(np.stack([np.asarray(e), np.asarray(n), sz - off], 1))
+        cls = np.ones(len(pts), np.uint8)
+        fast.require(NATIVE, "roadz lidar decks")
+        rows, ends = [], []
+        refused = 0
+        for (ring, half), (xy, _h) in zip(parts[:nb], local[:nb]):
+            got = self._profile(frame, xy, half, pts, cls)
+            if got is None:
+                continue
+            s, z, px, py, sla, slo, _arc = got
+            ground = self._cz_terrain(sla, slo) - off
+            if self._cz_unbuilt(s, z, ground):
+                refused += 1
+                continue
+            rows.append((np.stack([slo, sla], 1), z, 1, "", ""))
+            ok = np.flatnonzero(np.isfinite(z))
+            for at, far in ((ok[0], s[ok[0]]), (ok[-1], s[-1] - s[ok[-1]])):
+                if far <= LIDAR_STEP_M:
+                    ends.append((float(px[at]), float(py[at]), float(z[at])))
+        gaps = []
+        if len(parts) > nb:
+            fast.require(GAP_NATIVE, "roadz lidar gaps")
+            todo = [k for k in range(nb, len(parts)) if self._elevated_end(frame, ends, local[k][0][0])]
+            r2, gaps = self._stretches(frame, [parts[k] for k in todo], [local[k] for k in todo],
+                                       [fids[k - nb] for k in todo], pts, cls, ends)
+            rows += r2
+            rows += self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends)
+        log.debug("roadz cz %s: %d surface points, %d decks (%d refused as unbuilt in the surface), %d stretches, "
+                  "datum - %.2f", key, len(pts), nb, refused, len(gaps), off)
+        got = Lines.build(rows, corrected=True)
+        got.gaps = gaps
+        return got
+
+    def _cz_terrain(self, la, lo):
+        """CUZK's terrain (DMR 5G, its own datum) at (la, lo), NaN where none."""
+        x, y = merc_xy(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+        return self.cz.heights("dmr5g", x, y)
+
+    @staticmethod
+    def _cz_unbuilt(s, z, ground):
+        """Is a deck measured (s, z) over the terrain ground (both on our datum) the ground itself: CZ_NEW_DECK_SHARE of
+        its middle stations (CZ_END_M in from either end) within CZ_NEW_DECK_M of the terrain? Too short a deck to
+        tell (no middle stations): no."""
+        s, z, ground = (np.asarray(v, np.float64) for v in (s, z, ground))
+        mid = (s >= CZ_END_M) & (s <= s[-1] - CZ_END_M) & np.isfinite(z) & np.isfinite(ground)
+        if mid.sum() < 3:
+            return False
+        return float(np.mean(z[mid] - ground[mid] < CZ_NEW_DECK_M)) >= CZ_NEW_DECK_SHARE
 
     @staticmethod
     def _profile(frame, xy, half, pts, cls):

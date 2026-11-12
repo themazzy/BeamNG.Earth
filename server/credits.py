@@ -123,10 +123,13 @@ FEATURES = {
     "bld:bdtopo-fr": "IGN BD TOPO",
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
+    "roadz:cz": "CUZK DMP 1G and DMR 5G (CC BY 4.0)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
+    "roadz:cz": "Bridge deck heights in Czechia: \u00a9 \u010c\u00daZK, Digit\u00e1ln\u00ed model povrchu 1. generace "
+                "(DMP 1G) and Digit\u00e1ln\u00ed model reli\u00e9fu 5. generace (DMR 5G), CC BY 4.0, data changed",
     "roadz:hk": "Road and bridge heights in Hong Kong: Road Network of the Transport Department and 2020 LiDAR of the "
                 "Civil Engineering and Development Department, (c) Government of the Hong Kong SAR, from DATA.GOV.HK "
                 "and the CSDI Portal, data changed",
@@ -303,6 +306,12 @@ def feature_ids(conn):
             import roadz
             if roadz.hk_credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
                 ids.add("roadz:hk")
+        except Exception:
+            pass
+        try:                        # (Czechia's lidar tiles on disk near: czlidar)
+            import czlidar
+            if czlidar.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("roadz:cz")
         except Exception:
             pass
         try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
